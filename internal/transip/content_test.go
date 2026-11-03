@@ -51,3 +51,40 @@ func TestNSDelegationIsFullyQualified(t *testing.T) {
 	// two NS entries and the ownership record
 	assertCalls(t, repo, 3, 0)
 }
+
+// A mail exchanger is read back, so the second sync changes nothing. With the
+// default type list of ExternalDNS, which has no MX, it was created again on
+// every sync.
+func TestMXRecordIsReadBack(t *testing.T) {
+	repo := newFakeRepository("example.org")
+	p := NewWithRepository(repo, nil, false)
+
+	mail := endpoint.NewEndpointWithTTL("lists.example.org", "MX", 3600, "10 mail.example.com", "20 backup.example.com").
+		WithLabel(endpoint.ResourceLabelKey, "crd/default/mail")
+
+	syncOnce(t, p, &plan.SyncPolicy{}, mail)
+	assertContents(t, repo, "lists", "MX", "10 mail.example.com.", "20 backup.example.com.")
+
+	if changes := syncOnce(t, p, &plan.SyncPolicy{}, mail); changes.HasChanges() {
+		t.Errorf("expected no changes on the second sync, got %v", changes)
+	}
+	// two MX entries and the ownership record
+	assertCalls(t, repo, 3, 0)
+}
+
+// An SRV record is written with a fully qualified host and read back.
+func TestSRVRecordIsReadBack(t *testing.T) {
+	repo := newFakeRepository("example.org")
+	p := NewWithRepository(repo, nil, false)
+
+	sip := endpoint.NewEndpointWithTTL("_sip._tcp.example.org", "SRV", 3600, "10 20 5060 sip.example.com").
+		WithLabel(endpoint.ResourceLabelKey, "crd/default/sip")
+
+	syncOnce(t, p, &plan.SyncPolicy{}, sip)
+	assertContents(t, repo, "_sip._tcp", "SRV", "10 20 5060 sip.example.com.")
+
+	if changes := syncOnce(t, p, &plan.SyncPolicy{}, sip); changes.HasChanges() {
+		t.Errorf("expected no changes on the second sync, got %v", changes)
+	}
+	assertCalls(t, repo, 2, 0)
+}
