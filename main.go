@@ -26,6 +26,7 @@ type config struct {
 	account       string
 	keyFile       string
 	timeout       time.Duration
+	domainCache   time.Duration
 	domainFilter  []string
 	dryRun        bool
 	listenAddress string
@@ -54,6 +55,11 @@ func parseConfig(args []string, getenv func(string) string) (*config, error) {
 		return nil, fmt.Errorf("invalid TRANSIP_TIMEOUT: %w", err)
 	}
 
+	domainCache, err := time.ParseDuration(env("DOMAIN_CACHE_DURATION", "1h"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid DOMAIN_CACHE_DURATION: %w", err)
+	}
+
 	cfg := &config{}
 	fs := flag.NewFlagSet("external-dns-transip-webhook", flag.ContinueOnError)
 	fs.StringVar(&cfg.account, "transip-account", env("TRANSIP_ACCOUNT", ""),
@@ -62,6 +68,8 @@ func parseConfig(args []string, getenv func(string) string) (*config, error) {
 		"path to the private key of the TransIP account (env TRANSIP_KEYFILE)")
 	fs.DurationVar(&cfg.timeout, "transip-timeout", timeout,
 		"give up on a TransIP API call after this long; keep it well below the 15s ExternalDNS waits for the webhook (env TRANSIP_TIMEOUT)")
+	fs.DurationVar(&cfg.domainCache, "domain-cache-duration", domainCache,
+		"list the domains of the account again after this long, 0 lists them on every sync (env DOMAIN_CACHE_DURATION)")
 	fs.Func("domain-filter",
 		"limit the zones to this domain, can be repeated (env DOMAIN_FILTER, comma separated); all zones of the account when not set",
 		func(value string) error {
@@ -127,7 +135,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	provider, err := transip.New(cfg.account, cfg.keyFile, cfg.timeout, endpoint.NewDomainFilter(cfg.domainFilter), cfg.dryRun)
+	provider, err := transip.New(cfg.account, cfg.keyFile, cfg.timeout, cfg.domainCache, endpoint.NewDomainFilter(cfg.domainFilter), cfg.dryRun)
 	if err != nil {
 		log.Fatal(err)
 	}

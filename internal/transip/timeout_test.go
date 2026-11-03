@@ -34,7 +34,7 @@ func TestRecordsGivesUpOnAnAPIThatDoesNotAnswer(t *testing.T) {
 		PrivateKeyPath: privateKeyFile(t),
 		URL:            api.URL,
 		HTTPClient:     &http.Client{Timeout: 100 * time.Millisecond},
-	}, nil, false)
+	}, 0, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,8 +50,14 @@ func TestRecordsGivesUpOnAnAPIThatDoesNotAnswer(t *testing.T) {
 }
 
 func TestNewRefusesNoTimeout(t *testing.T) {
-	if _, err := New("example", privateKeyFile(t), 0, nil, false); err == nil {
+	if _, err := New("example", privateKeyFile(t), 0, time.Hour, nil, false); err == nil {
 		t.Fatal("New accepted a timeout of 0, which never gives up")
+	}
+}
+
+func TestNewRefusesANegativeDomainCacheDuration(t *testing.T) {
+	if _, err := New("example", privateKeyFile(t), time.Second, -time.Second, nil, false); err == nil {
+		t.Fatal("New accepted a negative domain cache duration")
 	}
 }
 
