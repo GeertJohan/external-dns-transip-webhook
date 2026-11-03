@@ -1,0 +1,53 @@
+package transip
+
+import (
+	"testing"
+
+	"sigs.k8s.io/external-dns/endpoint"
+	"sigs.k8s.io/external-dns/plan"
+)
+
+// TransIP takes a host name without a trailing dot as relative to the zone.
+// The in-tree provider added the dot to CNAME targets only, so an NS
+// delegation to external name servers was refused by the API, and that error
+// failed the whole apply.
+func TestContentForTarget(t *testing.T) {
+	tests := []struct{ recordType, target, want string }{
+		{"A", "192.0.2.1", "192.0.2.1"},
+		{"AAAA", "2001:db8::1", "2001:db8::1"},
+		{"TXT", `"v=spf1 -all"`, `"v=spf1 -all"`},
+		{"CNAME", "foo.example.com", "foo.example.com."},
+		{"CNAME", "foo.example.com.", "foo.example.com."},
+		{"NS", "ns0.example.com", "ns0.example.com."},
+		{"NS", "ns1.example.com.", "ns1.example.com."},
+		{"MX", "10 mail.example.com", "10 mail.example.com."},
+		{"MX", "10 mail.example.com.", "10 mail.example.com."},
+		{"MX", "0 .", "0 ."},
+		{"SRV", "10 20 5060 sip.example.com", "10 20 5060 sip.example.com."},
+		{"SRV", "10 20 5060 sip.example.com.", "10 20 5060 sip.example.com."},
+	}
+	for _, tt := range tests {
+		if got := contentForTarget(tt.recordType, tt.target); got != tt.want {
+			t.Errorf("%s %q: expected %q, got %q", tt.recordType, tt.target, tt.want, got)
+		}
+	}
+}
+
+// A delegation to external name servers is written fully qualified and read
+// back as ExternalDNS sent it, so the second sync changes nothing.
+func TestNSDelegationIsFullyQualified(t *testing.T) {
+	repo := newFakeRepository("example.org")
+	p := NewWithRepository(repo, nil, false)
+
+	sub := endpoint.NewEndpointWithTTL("sub.example.org", "NS", 3600, "ns0.example.com", "ns1.example.com.").
+		WithLabel(endpoint.ResourceLabelKey, "crd/default/sub")
+
+	syncOnce(t, p, &plan.SyncPolicy{}, sub)
+	assertContents(t, repo, "sub", "NS", "ns0.example.com.", "ns1.example.com.")
+
+	if changes := syncOnce(t, p, &plan.SyncPolicy{}, sub); changes.HasChanges() {
+		t.Errorf("expected no changes on the second sync, got %v", changes)
+	}
+	// two NS entries and the ownership record
+	assertCalls(t, repo, 3, 0)
+}

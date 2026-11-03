@@ -525,20 +525,38 @@ func dnsEntriesForEndpoint(ep *endpoint.Endpoint, zoneName string) []domain.DNSE
 
 	entries := []domain.DNSEntry{}
 	for _, target := range ep.Targets {
-		// external hostnames require a trailing dot in TransIP API
-		if ep.RecordType == endpoint.RecordTypeCNAME {
-			target = provider.EnsureTrailingDot(target)
-		}
-
 		entries = append(entries, domain.DNSEntry{
 			Name:    recordNameForEndpoint(ep, zoneName),
 			Expire:  ttl,
 			Type:    ep.RecordType,
-			Content: target,
+			Content: contentForTarget(ep.RecordType, target),
 		})
 	}
 
 	return entries
+}
+
+// contentForTarget returns the target as TransIP stores it. TransIP takes a
+// host name without a trailing dot as relative to the zone ("mail" is
+// mail.example.org), so the host name of a CNAME, NS, MX or SRV target gets
+// one. The hosts ExternalDNS sends are always fully qualified; it strips the
+// trailing dot from every target it reads back, so the records match.
+func contentForTarget(recordType, target string) string {
+	switch recordType {
+	case endpoint.RecordTypeCNAME, endpoint.RecordTypeNS:
+		return provider.EnsureTrailingDot(target)
+	case endpoint.RecordTypeMX, endpoint.RecordTypeSRV:
+		// "10 mail.example.org" and "10 20 5060 sip.example.org": the host
+		// is the last field
+		fields := strings.Fields(target)
+		if len(fields) < 2 {
+			return target
+		}
+		fields[len(fields)-1] = provider.EnsureTrailingDot(fields[len(fields)-1])
+		return strings.Join(fields, " ")
+	default:
+		return target
+	}
 }
 
 // zoneNameForDNSName returns the most specific zone the given name is in, or
