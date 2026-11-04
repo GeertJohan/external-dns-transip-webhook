@@ -31,8 +31,8 @@ a sidecar of ExternalDNS that holds the TransIP credentials and does the API cal
   MX and SRV targets get the dot too.
 - **MX records are read back.** The in-tree provider filtered with the default type list of
   ExternalDNS, which has no MX, so a managed MX record was created again on every sync.
-- **The domain list is cached.** The in-tree provider listed the account's domains on every read
-  and every apply. The list is now kept for `--domain-cache-duration`, see below.
+- **The domain list is fetched once per sync.** The in-tree provider listed the account's domains
+  on the read and again on the apply. The apply now uses the list of the read before it.
 
 A name and type is owned as a whole: an update replaces all entries of that record set, also the
 ones that were added by hand.
@@ -46,7 +46,6 @@ Every flag has an environment variable as its default.
 | `--transip-account` | `TRANSIP_ACCOUNT` | | TransIP account name |
 | `--transip-keyfile` | `TRANSIP_KEYFILE` | | path to the private key of the account |
 | `--transip-timeout` | `TRANSIP_TIMEOUT` | `5s` | give up on a TransIP API call after this long |
-| `--domain-cache-duration` | `DOMAIN_CACHE_DURATION` | `1h` | list the account's domains again after this long, `0` on every sync |
 | `--domain-filter` | `DOMAIN_FILTER` | all zones | zone to manage, can be repeated |
 | `--dry-run` | `DRY_RUN` | `false` | log the changes, apply none |
 | `--listen-address` | `LISTEN_ADDRESS` | `127.0.0.1:8888` | webhook API |
@@ -61,13 +60,10 @@ localhost.
 
 A TransIP account may make 1000 API calls per rolling hour, shared by everything that uses the
 account, and the API answers `429 Too many requests` beyond that. Each sync reads every managed
-zone, one call per zone, and each changed entry is one more call. The list of domains is one call
-per `--domain-cache-duration`. With 8 zones and the default sync interval of one minute that is
-about 480 calls an hour when nothing changes. Raise `--interval` of ExternalDNS, or narrow
-`--domain-filter`, when the account has many zones.
-
-A domain added to the account is picked up when the cache expires. A domain that leaves it is
-noticed on the next sync, because reading its zone fails and empties the cache.
+zone, one call per zone, and the list of domains is one more; each changed entry adds a call. With
+8 zones and the default sync interval of one minute that is about 540 calls an hour when nothing
+changes. Raise `--interval` of ExternalDNS, or narrow `--domain-filter`, when the account has many
+zones.
 
 ### Dry run
 

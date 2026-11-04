@@ -86,12 +86,9 @@ type Provider struct {
 	domainFilter *endpoint.DomainFilter
 	dryRun       bool
 
-	// the zones of the account, listed at most once per domainCacheDuration;
-	// zero lists them on every call
-	domainCacheDuration time.Duration
-	cachedZones         []string
-	cachedAt            time.Time
-	now                 func() time.Time
+	// the zones listed by the last Records call, for the ApplyChanges of the
+	// same sync
+	syncZones []string
 
 	// ExternalDNS calls the provider from one goroutine, but nothing in the
 	// webhook protocol guarantees that
@@ -100,9 +97,8 @@ type Provider struct {
 
 // New creates a TransIP provider that authenticates with the private key of
 // the given account. Every TransIP API call, the token request included, gives
-// up after timeout. The list of domains of the account is fetched again after
-// domainCacheDuration, or on every call when it is zero.
-func New(accountName, privateKeyFile string, timeout, domainCacheDuration time.Duration, domainFilter *endpoint.DomainFilter, dryRun bool) (*Provider, error) {
+// up after timeout.
+func New(accountName, privateKeyFile string, timeout time.Duration, domainFilter *endpoint.DomainFilter, dryRun bool) (*Provider, error) {
 	if accountName == "" {
 		return nil, errors.New("TransIP account name not set")
 	}
@@ -113,10 +109,6 @@ func New(accountName, privateKeyFile string, timeout, domainCacheDuration time.D
 
 	if timeout <= 0 {
 		return nil, errors.New("TransIP timeout must be positive")
-	}
-
-	if domainCacheDuration < 0 {
-		return nil, errors.New("domain cache duration must not be negative")
 	}
 
 	apiMode := gotransip.APIModeReadWrite
@@ -132,18 +124,16 @@ func New(accountName, privateKeyFile string, timeout, domainCacheDuration time.D
 		// call that hangs then outlasts the HTTP client timeout of ExternalDNS,
 		// which exits on it; an error here is a 500, which it retries.
 		HTTPClient: &http.Client{Timeout: timeout},
-	}, domainCacheDuration, domainFilter, dryRun)
+	}, domainFilter, dryRun)
 }
 
-func newWithConfiguration(configuration gotransip.ClientConfiguration, domainCacheDuration time.Duration, domainFilter *endpoint.DomainFilter, dryRun bool) (*Provider, error) {
+func newWithConfiguration(configuration gotransip.ClientConfiguration, domainFilter *endpoint.DomainFilter, dryRun bool) (*Provider, error) {
 	client, err := gotransip.NewClient(configuration)
 	if err != nil {
 		return nil, fmt.Errorf("could not setup TransIP API client: %w", err)
 	}
 
-	p := NewWithRepository(&domain.Repository{Client: client}, domainFilter, dryRun)
-	p.domainCacheDuration = domainCacheDuration
-	return p, nil
+	return NewWithRepository(&domain.Repository{Client: client}, domainFilter, dryRun), nil
 }
 
 // NewWithRepository creates a TransIP provider on top of the given repository.
@@ -156,7 +146,6 @@ func NewWithRepository(repo DNSRepository, domainFilter *endpoint.DomainFilter, 
 		repo:         repo,
 		domainFilter: domainFilter,
 		dryRun:       dryRun,
-		now:          time.Now,
 	}
 }
 
@@ -197,6 +186,7 @@ func (p *Provider) Records(_ context.Context) ([]*endpoint.Endpoint, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	p.syncZones = nil
 	zones, err := p.zones()
 	if err != nil {
 		return nil, err
@@ -207,8 +197,6 @@ func (p *Provider) Records(_ context.Context) ([]*endpoint.Endpoint, error) {
 	for _, zoneName := range zones {
 		entries, err := p.repo.GetDNSEntries(zoneName)
 		if err != nil {
-			// the domain may have left the account
-			p.forgetZones()
 			return nil, fmt.Errorf("could not get DNS entries of %s: %w", zoneName, err)
 		}
 
@@ -243,6 +231,8 @@ func (p *Provider) Records(_ context.Context) ([]*endpoint.Endpoint, error) {
 		}
 	}
 
+	p.syncZones = zones
+
 	return endpoints, nil
 }
 
@@ -256,9 +246,17 @@ func (p *Provider) ApplyChanges(_ context.Context, changes *plan.Changes) error 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	zones, err := p.zones()
-	if err != nil {
-		return err
+	// ExternalDNS reads the records right before it applies changes, so the
+	// zones listed then are current; listing the domains again would spend one
+	// more call of the TransIP budget. Each list is used once, so the next sync
+	// lists them again.
+	zones := p.syncZones
+	p.syncZones = nil
+	if zones == nil {
+		var err error
+		if zones, err = p.zones(); err != nil {
+			return err
+		}
 	}
 
 	// the DNS entries of every zone that gets updated, fetched once
@@ -288,14 +286,8 @@ func (p *Provider) ApplyChanges(_ context.Context, changes *plan.Changes) error 
 	return nil
 }
 
-// zones returns the names of the zones this provider manages. Listing the
-// domains is a TransIP API call, and the account has a budget of 1000 calls an
-// hour, so the list is kept for domainCacheDuration.
+// zones returns the names of the zones this provider manages
 func (p *Provider) zones() ([]string, error) {
-	if p.cachedZones != nil && p.now().Sub(p.cachedAt) < p.domainCacheDuration {
-		return p.cachedZones, nil
-	}
-
 	domains, err := p.repo.GetAll()
 	if err != nil {
 		return nil, fmt.Errorf("could not get domains: %w", err)
@@ -310,18 +302,7 @@ func (p *Provider) zones() ([]string, error) {
 		}
 	}
 
-	if p.domainCacheDuration > 0 {
-		// non-nil, so an account without matching zones is cached too
-		p.cachedZones = append([]string{}, zones...)
-		p.cachedAt = p.now()
-	}
-
 	return zones, nil
-}
-
-// forgetZones makes the next call list the domains again
-func (p *Provider) forgetZones() {
-	p.cachedZones = nil
 }
 
 // changeSet applies the changes of one ApplyChanges call
@@ -348,8 +329,6 @@ func (c *changeSet) apply(ep *endpoint.Endpoint, change func(epLog *log.Entry, z
 	if _, ok := c.entries[zoneName]; !ok {
 		entries, err := c.provider.repo.GetDNSEntries(zoneName)
 		if err != nil {
-			// the domain may have left the account
-			c.provider.forgetZones()
 			return fmt.Errorf("could not get DNS entries of %s: %w", zoneName, err)
 		}
 		c.entries[zoneName] = entries
