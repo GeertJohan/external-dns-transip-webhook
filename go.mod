@@ -2,6 +2,8 @@ module github.com/lion7/external-dns-transip-webhook
 
 go 1.27.0
 
+toolchain go1.27.3
+
 require (
 	github.com/sirupsen/logrus v1.10.2
 	github.com/transip/gotransip/v6 v6.29.0
