@@ -1,10 +1,10 @@
-# Push a tag v<year>-<month>-<day>-<sha> on a commit of main, see "Releases" in
-# the README. The date is the commit date in UTC and the sha the first 7
-# characters of the commit, so a commit has exactly one valid tag.
+# Push a tag <upstream version>-<n> on a commit of main, see "Releases" in the
+# README: the upstream release the fork is based on, and a build number that
+# counts the releases of this fork on top of it.
 on:
   push:
     tags:
-      - 'v*'
+      - '*.*.*-*'
 permissions:
   contents: read
 jobs:
@@ -24,9 +24,13 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          want="v$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%d HEAD)-$(git rev-parse HEAD | cut -c1-7)"
-          if [ "$TAG" != "$want" ]; then
-            echo "::error::tag $TAG does not match its commit, expected $want"
+          if ! [[ "$TAG" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-[1-9][0-9]*$ ]]; then
+            echo "::error::tag $TAG is not <upstream version>-<n>"
+            exit 1
+          fi
+          base=${BASH_REMATCH[1]}
+          if ! git merge-base --is-ancestor "refs/tags/$base" HEAD 2>/dev/null; then
+            echo "::error::upstream release $base is not in the history of $TAG"
             exit 1
           fi
           if ! git merge-base --is-ancestor HEAD origin/main; then

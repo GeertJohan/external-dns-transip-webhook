@@ -82,7 +82,7 @@ provider:
   webhook:
     image:
       repository: ghcr.io/geertjohan/external-dns-transip-webhook
-      tag: v2026-11-04-0123abc@sha256:...  # see Releases
+      tag: 0.1.1-1@sha256:...  # see Releases
     args:
       - --transip-account=example
       - --transip-keyfile=/transip/privatekey
@@ -122,16 +122,22 @@ registry against an in-memory TransIP repository.
 
 ## Releases
 
-A release is a tag `v<year>-<month>-<day>-<sha>` on a commit of `main`: the commit date in UTC and
-the first 7 characters of the commit, so every commit has exactly one release name. Tag and push:
+A release is a tag `<upstream version>-<n>` on a commit of `main`: the upstream release the fork
+is based on, and a build number counting the fork's releases on top of it, from 1. So `0.1.1-1`,
+`0.1.1-2`, and after merging upstream `0.2.0` it is `0.2.0-1`. The workflow checks that the base
+release is in the history, so push its tag to the fork first:
 
 ```bash
-tag="v$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%d HEAD)-$(git rev-parse HEAD | cut -c1-7)"
+base=0.1.1 tag=0.1.1-1
+git fetch upstream tag "$base" && git push origin "refs/tags/$base"
 git tag -s "$tag" -m "$tag" && git push origin "$tag"
 ```
 
-The release workflow refuses a tag that does not match its commit or is not on `main`. It runs the
-tests and govulncheck, builds the image with ko for linux/amd64 and linux/arm64, signs it keyless
+Semver reads the suffix as a pre-release, so tools that skip pre-releases need a rule. For
+Renovate: `"versioning": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-(?<build>\\d+)$"`.
+
+The release workflow refuses a tag of another form, on a commit outside `main`, or without its
+base release in the history. It runs the tests and govulncheck, builds the image with ko for linux/amd64 and linux/arm64, signs it keyless
 with cosign, attaches an SBOM and build provenance, and creates the GitHub release with the image
 digest. Verify an image with:
 
