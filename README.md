@@ -81,8 +81,8 @@ provider:
   name: webhook
   webhook:
     image:
-      repository: ghcr.io/lion7/external-dns-transip-webhook
-      tag: 0.1.0
+      repository: ghcr.io/geertjohan/external-dns-transip-webhook
+      tag: v2026-11-04-0123abc@sha256:...  # see Releases
     args:
       - --transip-account=example
       - --transip-keyfile=/transip/privatekey
@@ -119,6 +119,28 @@ ko build --local .
 
 The tests in `internal/transip` run the provider under the real ExternalDNS planner and TXT
 registry against an in-memory TransIP repository.
+
+## Releases
+
+A release is a tag `v<year>-<month>-<day>-<sha>` on a commit of `main`: the commit date in UTC and
+the first 7 characters of the commit, so every commit has exactly one release name. Tag and push:
+
+```bash
+tag="v$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%d HEAD)-$(git rev-parse HEAD | cut -c1-7)"
+git tag -s "$tag" -m "$tag" && git push origin "$tag"
+```
+
+The release workflow refuses a tag that does not match its commit or is not on `main`. It runs the
+tests and govulncheck, builds the image with ko for linux/amd64 and linux/arm64, signs it keyless
+with cosign, attaches an SBOM and build provenance, and creates the GitHub release with the image
+digest. Verify an image with:
+
+```bash
+cosign verify ghcr.io/geertjohan/external-dns-transip-webhook:$tag \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "https://github.com/GeertJohan/external-dns-transip-webhook/.github/workflows/release.yaml@refs/tags/$tag"
+gh attestation verify oci://ghcr.io/geertjohan/external-dns-transip-webhook:$tag -R GeertJohan/external-dns-transip-webhook
+```
 
 ## License
 
